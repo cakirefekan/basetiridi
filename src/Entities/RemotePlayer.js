@@ -8,9 +8,9 @@ export class RemotePlayer {
         this.id = id;
         this.data = initialState || {};
 
-        this.targetPosition = new THREE.Vector3();
-        this.targetRotation = 0;
-        this.lastUpdate = Date.now();
+        // Initial Buffer State
+        this.positionBuffer = [];
+        this.targetPosition = new THREE.Vector3(); // Keep for fallback references
 
         // Skin
         this.currentSkin = this.data.skin || 'happy';
@@ -20,11 +20,15 @@ export class RemotePlayer {
         // Set Initial Position
         if (this.data.position) {
             this.mesh.position.set(this.data.position.x, this.data.position.y, this.data.position.z);
-            this.targetPosition.copy(this.mesh.position);
+            // Push initial state
+            this.positionBuffer.push({
+                timestamp: Date.now(),
+                position: this.mesh.position.clone(),
+                rotation: this.data.rotation || 0
+            });
         }
         if (this.data.rotation) {
             this.mesh.rotation.y = this.data.rotation;
-            this.targetRotation = this.data.rotation;
         }
 
         this.animationTimer = 0;
@@ -144,12 +148,24 @@ export class RemotePlayer {
     }
 
     updateData(data) {
+        if (!data) return;
+
+        // --- Interpolation Buffer Update ---
+        const now = Date.now();
         if (data.position) {
-            this.targetPosition.set(data.position.x, data.position.y, data.position.z);
+            this.positionBuffer.push({
+                timestamp: now,
+                position: new THREE.Vector3(data.position.x, data.position.y, data.position.z),
+                rotation: data.rotation !== undefined ? data.rotation : this.mesh.rotation.y
+            });
+
+            // Keep buffer clean (max 1 second history)
+            while (this.positionBuffer.length > 20 && this.positionBuffer[0].timestamp < now - 1000) {
+                this.positionBuffer.shift();
+            }
         }
-        if (data.rotation !== undefined) {
-            this.targetRotation = data.rotation;
-        }
+        // -----------------------------------
+
         if (data.skin && data.skin !== this.currentSkin) {
             this.setSkin(data.skin);
         }
@@ -170,9 +186,6 @@ export class RemotePlayer {
         if (data.isRagdoll !== undefined) {
             this.isRagdoll = data.isRagdoll;
         }
-
-        // Simple smoothing
-        this.lastUpdate = Date.now();
     }
 
     updateHoldingObject(objectId) {
@@ -223,9 +236,48 @@ export class RemotePlayer {
     }
 
     update(deltaTime) {
-        // Interpolate Anchor Position
-        const alpha = Math.min(deltaTime * 10, 1.0);
-        this.anchorPosition.lerp(this.targetPosition, alpha);
+        // --- Interpolation Logic ---
+        const INTERP_DELAY = 100; // ms latency buffer
+        const renderTime = Date.now() - INTERP_DELAY;
+
+        let p0 = null;
+        let p1 = null;
+
+        // Find relevant frames
+        for (let i = 0; i < this.positionBuffer.length - 1; i++) {
+            if (this.positionBuffer[i].timestamp <= renderTime && this.positionBuffer[i + 1].timestamp >= renderTime) {
+                p0 = this.positionBuffer[i];
+                p1 = this.positionBuffer[i + 1];
+                break;
+            }
+        }
+
+        if (p0 && p1) {
+            // Interpolate between p0 and p1
+            const total = p1.timestamp - p0.timestamp;
+            const diff = renderTime - p0.timestamp;
+            const factor = total > 0 ? diff / total : 0;
+
+            this.anchorPosition.lerpVectors(p0.position, p1.position, factor);
+
+            // Rotation Interpolation (Shortest Path)
+            let rotDiff = p1.rotation - p0.rotation;
+            while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
+            while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
+            this.mesh.rotation.y = p0.rotation + rotDiff * factor;
+
+        } else if (this.positionBuffer.length > 0) {
+            // Fallback: Check if we should extrapolate or clamp
+            // If we are waiting for data (renderTime > newest), we clamp to newest.
+            // If we are lagging behind updates significantly?
+
+            // Simple robust fallback: display the state closest to renderTime?
+            // Usually clamping to newest is best for "lag".
+            const newest = this.positionBuffer[this.positionBuffer.length - 1];
+            this.anchorPosition.copy(newest.position);
+            this.mesh.rotation.y = newest.rotation;
+        }
+        // ---------------------------
 
         // Update Mesh Position (Anchor + Offset)
         this.mesh.position.copy(this.anchorPosition);
@@ -236,9 +288,6 @@ export class RemotePlayer {
             yOffset += 0.6; // Lift up when ragdolling
         }
         this.mesh.position.y += yOffset;
-
-        // Interpolate Rotation
-        this.mesh.rotation.y = THREE.MathUtils.lerp(this.mesh.rotation.y, this.targetRotation, alpha);
 
         // Ragdoll mesh rotation (fall on back)
         if (this.isRagdoll) {
