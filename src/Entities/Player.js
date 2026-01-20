@@ -388,7 +388,7 @@ export class Player {
 
         if (this.isGrounded) {
             accel = 150.0; // Snappy acceleration
-            friction = 20.0; // Responsive stopping
+            friction = 50.0; // High friction for immediate stops
         } else {
             // Air Control
             accel = 20.0; // Low air control
@@ -422,14 +422,21 @@ export class Player {
 
         } else {
             // Decelerate / Friction
-            // If just landed and not moving, STOP immediately to prevent sliding
-            if (applyLandingFriction) {
-                currentVel.x *= 0.1;
-                currentVel.z *= 0.1;
+            // If we are grounded and not inputting, STOP fast to prevent sliding
+            if (this.isGrounded) {
+                // Aggressive damping on ground (Exponential decay for smoothness but fast)
+                // Using 0.0001 as target, effectively zero
+                currentVel.x = THREE.MathUtils.lerp(currentVel.x, 0, 15 * deltaTime);
+                currentVel.z = THREE.MathUtils.lerp(currentVel.z, 0, 15 * deltaTime);
+
+                // Hard snapping if very slow to prevent micro-sliding
+                if (Math.abs(currentVel.x) < 0.1) currentVel.x = 0;
+                if (Math.abs(currentVel.z) < 0.1) currentVel.z = 0;
             } else {
+                // In Air Friction (Linear)
                 const speed = Math.sqrt(currentVel.x ** 2 + currentVel.z ** 2);
                 if (speed > 0) {
-                    const drop = friction * deltaTime; // Linear friction
+                    const drop = friction * deltaTime;
                     const newSpeed = Math.max(0, speed - drop);
                     const factor = speed > 0.001 ? newSpeed / speed : 0;
 
@@ -453,6 +460,8 @@ export class Player {
             this.body.velocity.y = this.params.jumpForce;
             this.jumpCooldown = 0.25;
             this.input.keys.jump = false;
+            // Force Unground immediately to prevent double jump or friction application
+            this.isGrounded = false;
             this.body.wakeUp();
         }
     }
@@ -559,9 +568,12 @@ export class Player {
 
     checkGrounded() {
         const from = this.body.position;
-        // Increased tolerance from 0.1 to 0.2 to prevent flickering "air state" while walking
-        const to = from.vsub(new CANNON.Vec3(0, this.params.radius + 0.2, 0));
+        // Increased tolerance from 0.2 to 0.5 to definitively catch the ground
+        const to = from.vsub(new CANNON.Vec3(0, this.params.radius + 0.5, 0));
         const result = new CANNON.RaycastResult();
+
+        // If explicitly moving UP fast, we are jumping/flying, not grounded.
+        if (this.body.velocity.y > 2.0) return false;
 
         if (this.physics && this.physics.world) {
             const hasHit = this.physics.world.raycastClosest(from, to, {
