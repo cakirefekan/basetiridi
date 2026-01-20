@@ -587,7 +587,8 @@ export class Player {
 
     checkGrounded() {
         const from = this.body.position;
-        const to = from.vsub(new CANNON.Vec3(0, this.params.radius + 0.1, 0));
+        // Increased tolerance from 0.1 to 0.2 to prevent flickering "air state" while walking
+        const to = from.vsub(new CANNON.Vec3(0, this.params.radius + 0.2, 0));
         const result = new CANNON.RaycastResult();
 
         if (this.physics && this.physics.world) {
@@ -595,14 +596,9 @@ export class Player {
                 skipBackfaces: true
             }, result);
 
-            if (this.physics && this.physics.world) {
-                const hasHit = this.physics.world.raycastClosest(from, to, {
-                    skipBackfaces: true
-                }, result);
-                return hasHit && result.body !== this.body;
-            }
-            return false;
+            return hasHit && result.body !== this.body;
         }
+        return false;
     }
 
     updateCameraPosition() {
