@@ -137,9 +137,23 @@ export class FootballWorld {
 
         this.scene.add(goalGroup);
 
-        // Physics for posts (Simplified)
+        // Physics for posts (Corrected Position)
+        // Goal needs to be outside the field boundary slightly?
+        // Or we make the boundary wall have a "Hole" for the goal.
+        // Simplest: Place posts slightly inside the field visually, or move boundary.
+
+        // Let's create proper physical box for the Goal Frame (Posts + Crossbar)
+        // Left Post Body
         this.createWall(x, 1.5, -3, 0.4, 3, 0.4);
+        // Right Post Body
         this.createWall(x, 1.5, 3, 0.4, 3, 0.4);
+        // Crossbar Body
+        this.createWall(x, 3, 0, 0.4, 0.4, 6);
+
+        // Back Net (Invisible Box behind goal line to catch ball)
+        // If x is -30 (Left Goal), net is at -32. Width 2m.
+        const netX = x > 0 ? x + 1.5 : x - 1.5;
+        this.createWall(netX, 1.5, 0, 2, 3, 6);
     }
 
     createFootball() {
