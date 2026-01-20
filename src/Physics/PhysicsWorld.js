@@ -113,4 +113,8 @@ export class PhysicsWorld {
             this.objectsToUpdate.push({ mesh, body });
         }
     }
+
+    addMeshBodyPair(mesh, body) {
+        this.addBody(body, mesh);
+    }
 }
