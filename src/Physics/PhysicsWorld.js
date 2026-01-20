@@ -10,32 +10,61 @@ export class PhysicsWorld {
         this.world.solver.iterations = 20; // Increase solver stability for high gravity
 
         // Materials
-        this.defaultMaterial = new CANNON.Material('default');
-        const defaultContactMaterial = new CANNON.ContactMaterial(
-            this.defaultMaterial,
-            this.defaultMaterial,
-            {
-                friction: 0.1,
-                restitution: 0.0,
-                contactEquationStiffness: 1e8,
-                contactEquationRelaxation: 2
-            }
-        );
-        this.world.addContactMaterial(defaultContactMaterial);
+        // Materials Dictionary
+        this.materials = {
+            default: new CANNON.Material('default'),
+            ground: new CANNON.Material('ground'),
+            object: new CANNON.Material('object'),
+            slippery: new CANNON.Material('slippery')
+        };
 
-        // Slippery Material for Player
-        this.slipperyMaterial = new CANNON.Material('slippery');
-        const slipperyContact = new CANNON.ContactMaterial(
-            this.defaultMaterial,
-            this.slipperyMaterial,
-            {
-                friction: 0.0,
-                restitution: 0.0,
-                contactEquationStiffness: 1e8,
-                contactEquationRelaxation: 2
-            }
-        );
-        this.world.addContactMaterial(slipperyContact);
+        // Backward compatibility
+        this.defaultMaterial = this.materials.default;
+        this.slipperyMaterial = this.materials.slippery;
+
+        // Contact Materials
+
+        // Default - Default
+        this.world.addContactMaterial(new CANNON.ContactMaterial(
+            this.materials.default, this.materials.default,
+            { friction: 0.1, restitution: 0.0, contactEquationStiffness: 1e8, contactEquationRelaxation: 2 }
+        ));
+
+        // Ground - Default (Standard objects on ground)
+        this.world.addContactMaterial(new CANNON.ContactMaterial(
+            this.materials.ground, this.materials.default,
+            { friction: 0.5, restitution: 0.0 } // More friction on ground
+        ));
+
+        // Ground - Object (Bouncy Ball)
+        this.world.addContactMaterial(new CANNON.ContactMaterial(
+            this.materials.ground, this.materials.object,
+            { friction: 0.5, restitution: 0.7 } // High bounce
+        ));
+
+        // Object - Object
+        this.world.addContactMaterial(new CANNON.ContactMaterial(
+            this.materials.object, this.materials.object,
+            { friction: 0.5, restitution: 0.5 }
+        ));
+
+        // Object - Default
+        this.world.addContactMaterial(new CANNON.ContactMaterial(
+            this.materials.object, this.materials.default,
+            { friction: 0.5, restitution: 0.5 }
+        ));
+
+        // Slippery - Default (Player on normal stuff)
+        this.world.addContactMaterial(new CANNON.ContactMaterial(
+            this.materials.slippery, this.materials.default,
+            { friction: 0.0, restitution: 0.0, contactEquationStiffness: 1e8, contactEquationRelaxation: 2 }
+        ));
+
+        // Slippery - Ground (Player on ground)
+        this.world.addContactMaterial(new CANNON.ContactMaterial(
+            this.materials.slippery, this.materials.ground,
+            { friction: 0.0, restitution: 0.0, contactEquationStiffness: 1e8, contactEquationRelaxation: 2 }
+        ));
 
         this.objectsToUpdate = [];
 
