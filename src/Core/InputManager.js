@@ -13,7 +13,11 @@ export class InputManager {
             toggleHelp: false
         };
 
-        this.mouse = { x: 0, y: 0 };
+        this.mouse = { x: 0, y: 0 }; // Legacy public property, can be removed or kept for debug
+        this._accumulatedMouseX = 0;
+        this._accumulatedMouseY = 0;
+        this.frameMouseX = 0;
+        this.frameMouseY = 0;
         this.isLocked = false;
 
         this.init();
@@ -101,18 +105,29 @@ export class InputManager {
     onMouseMove(e) {
         // Only process mouse look if locked and NOT blocked
         if (this.isLocked && !this.isInputBlocked) {
-            this.mouse.x += e.movementX;
-            this.mouse.y += e.movementY;
-        } else {
-            // Keep delta 0
+            // Accumulate movement in a private buffer
+            this._accumulatedMouseX += e.movementX;
+            this._accumulatedMouseY += e.movementY;
         }
     }
 
+    update() {
+        // FRAME SNAPSHOT LOGIC
+        // The update method is required to prepare the input state for the current frame.
+        // 1. Snapshot the accumulated mouse movement so it is stable for this entire frame.
+        this.frameMouseX = this._accumulatedMouseX;
+        this.frameMouseY = this._accumulatedMouseY;
+
+        // 2. Clear the accumulator for the next frame's events
+        this._accumulatedMouseX = 0;
+        this._accumulatedMouseY = 0;
+
+        // Future: Poll Gamepads here
+    }
+
     getMouseDelta() {
-        const delta = { x: this.mouse.x, y: this.mouse.y };
-        this.mouse.x = 0; // Consumption based
-        this.mouse.y = 0;
-        return delta;
+        // Return the stable snapshot for this frame
+        return { x: this.frameMouseX, y: this.frameMouseY };
     }
 
     // Helper to block/unblock
