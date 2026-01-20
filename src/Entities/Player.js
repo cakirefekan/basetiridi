@@ -323,8 +323,8 @@ export class Player {
     handleMovement(deltaTime) {
         // Init state if missing (lazy init)
         if (this.wasGrounded === undefined) this.wasGrounded = true;
-        if (this.landTimer === undefined) this.landTimer = 0;
         if (this.jumpCooldown === undefined) this.jumpCooldown = 0;
+        if (this.ragdollDebounce === undefined) this.ragdollDebounce = 0; // Prevent accidental triggers
 
         // 1. Check Ground State efficiently
         this.isGrounded = this.checkGrounded();
@@ -339,102 +339,70 @@ export class Player {
                 if (this.ragdollTimer <= 0) {
                     this.isRagdoll = false;
                     this.body.wakeUp(); // Wake up to move
+                    this.mesh.rotation.x = 0; // Snap up
                 }
-            } else {
-                // In air, keep falling
             }
-
             // Friction/Stop movement while ragdolling
-            this.body.velocity.x = THREE.MathUtils.lerp(this.body.velocity.x, 0, 2 * deltaTime);
-            this.body.velocity.z = THREE.MathUtils.lerp(this.body.velocity.z, 0, 2 * deltaTime);
+            this.body.velocity.x = THREE.MathUtils.lerp(this.body.velocity.x, 0, 5 * deltaTime);
+            this.body.velocity.z = THREE.MathUtils.lerp(this.body.velocity.z, 0, 5 * deltaTime);
             return; // SKIP NORMAL MOVEMENT
         } else {
-            // Recover from ragdoll (Rotate X back to 0)
-            this.mesh.rotation.x = THREE.MathUtils.lerp(this.mesh.rotation.x, 0, 8 * deltaTime);
+            // Recover from ragdoll (visual smoothing)
+            if (Math.abs(this.mesh.rotation.x) > 0.1) {
+                this.mesh.rotation.x = THREE.MathUtils.lerp(this.mesh.rotation.x, 0, 15 * deltaTime);
+            } else {
+                this.mesh.rotation.x = 0;
+            }
         }
 
         // Detect Landing
+        let applyLandingFriction = false;
         if (this.isGrounded && !this.wasGrounded) {
-            // Just landed! Apply landing lag.
-            this.landTimer = 0.15; // 150ms pause
-
-            if (this.isRagdoll) {
-                // If we landed while ragdolling (handled above usually, but just in case)
-            }
+            // Just landed!
+            applyLandingFriction = true;
         }
         this.wasGrounded = this.isGrounded;
 
         // Update Timers
-        if (this.landTimer > 0) this.landTimer -= deltaTime;
         if (this.jumpCooldown > 0) this.jumpCooldown -= deltaTime;
+        if (this.ragdollDebounce > 0) this.ragdollDebounce -= deltaTime;
 
         // 2. Input Calculation
-        // Calculate Forward/Right based on CAMERA YAW (YawObject)
         const transform = new THREE.Euler(0, this.yaw, 0);
         const forward = new THREE.Vector3(0, 0, -1).applyEuler(transform);
         const right = new THREE.Vector3(1, 0, 0).applyEuler(transform);
 
         const direction = new THREE.Vector3();
 
-        // Disable input during landing lag or ragdoll
-        if (this.landTimer <= 0 && !this.isRagdoll) {
-            if (this.input.keys.forward) direction.add(forward);
-            if (this.input.keys.backward) direction.sub(forward);
-            if (this.input.keys.right) direction.add(right);
-            if (this.input.keys.left) direction.sub(right);
-        }
+        if (this.input.keys.forward) direction.add(forward);
+        if (this.input.keys.backward) direction.sub(forward);
+        if (this.input.keys.right) direction.add(right);
+        if (this.input.keys.left) direction.sub(right);
 
         if (direction.length() > 0) direction.normalize();
 
-        // Force wake if input active
-        if (direction.length() > 0 || this.input.keys.jump) {
-            this.body.wakeUp();
-        }
-
-        // CHECK RAGDOLL TRIGGER
-        // Stationary, In Air, Sprint Key Pressed
-        const speed = Math.sqrt(this.body.velocity.x ** 2 + this.body.velocity.z ** 2);
-        if (!this.isGrounded && speed < 1.0 && this.input.keys.sprint && !this.isRagdoll && this.landTimer <= 0) {
-            this.isRagdoll = true;
-            this.ragdollTimer = 2.0; // Stay down for 2 seconds after landing
-        }
-
-        // 3. Movement Physics (Acceleration/Deceleration)
+        // 3. Movement Physics Settings
         const targetRunSpeed = this.input.keys.sprint ? this.params.speed * 1.5 : this.params.speed;
-        const currentVel = this.body.velocity;
-
-        let accel, friction;
+        let accel = 100.0;
+        let friction = 10.0;
 
         if (this.isGrounded) {
-            if (this.landTimer > 0) {
-                // Landing Lag: High friction, no control
-                accel = 0;
-                friction = 100.0; // Stop quickly
-            } else {
-                // Normal Ground Control
-                // Linear acceleration feels more solid
-                accel = 100.0;
-                friction = 80.0;
-            }
+            accel = 150.0; // Snappy acceleration
+            friction = 20.0; // Responsive stopping
         } else {
             // Air Control
-            // Low control, low friction (preserve momentum)
-            accel = 15.0;
-            friction = 2.0;
+            accel = 20.0; // Low air control
+            friction = 0.5; // Preserve air momentum
         }
 
         // Apply Forces
+        const currentVel = this.body.velocity;
+
         if (direction.length() > 0) {
             // Accelerate
-            // We only apply acceleration to the component of velocity in the input direction?
-            // Simple approach: Add velocity vector, clamp magnitude.
-
-            // 1. Calculate target velocity vector
             const targetVelX = direction.x * targetRunSpeed;
             const targetVelZ = direction.z * targetRunSpeed;
 
-            // 2. Move current velocity towards target linearly
-            // We do this per axis for simplicity, or vector math
             const moveTowards = (current, target, maxDelta) => {
                 if (Math.abs(target - current) <= maxDelta) return target;
                 return current + Math.sign(target - current) * maxDelta;
@@ -443,45 +411,49 @@ export class Player {
             currentVel.x = moveTowards(currentVel.x, targetVelX, accel * deltaTime);
             currentVel.z = moveTowards(currentVel.z, targetVelZ, accel * deltaTime);
 
-            // Visual Rotation (Mesh)
+            // Visual Rotation
             const targetRotation = Math.atan2(direction.x, direction.z);
             let rotDiff = targetRotation - this.mesh.rotation.y;
             while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
             while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
-            const rotationSpeed = 20;
-            this.mesh.rotation.y += rotDiff * Math.min(1, rotationSpeed * deltaTime);
+            this.mesh.rotation.y += rotDiff * Math.min(1, 25 * deltaTime);
+
+            this.body.wakeUp();
 
         } else {
             // Decelerate / Friction
-            // Approach 0
-            const speed = Math.sqrt(currentVel.x ** 2 + currentVel.z ** 2);
-            if (speed > 0) {
-                const drop = friction * deltaTime;
-                const newSpeed = Math.max(0, speed - drop);
-                const factor = newSpeed / speed;
+            // If just landed and not moving, STOP immediately to prevent sliding
+            if (applyLandingFriction) {
+                currentVel.x *= 0.1;
+                currentVel.z *= 0.1;
+            } else {
+                const speed = Math.sqrt(currentVel.x ** 2 + currentVel.z ** 2);
+                if (speed > 0) {
+                    const drop = friction * deltaTime; // Linear friction
+                    const newSpeed = Math.max(0, speed - drop);
+                    const factor = speed > 0.001 ? newSpeed / speed : 0;
 
-                currentVel.x *= factor;
-                currentVel.z *= factor;
+                    currentVel.x *= factor;
+                    currentVel.z *= factor;
+                }
             }
         }
 
-        // 4. Jump Logic (No bunny hopping)
-        // Only jump if grounded, not in landing lag, and cooldown ready
-        if (this.input.keys.jump && this.isGrounded && this.landTimer <= 0 && this.jumpCooldown <= 0) {
+        // CHECK RAGDOLL TRIGGER (Debounced)
+        // Stationary, In Air, Sprint Key Pressed
+        const speed = Math.sqrt(currentVel.x ** 2 + currentVel.z ** 2);
+        if (!this.isGrounded && speed < 1.0 && this.input.keys.sprint && !this.isRagdoll && this.ragdollDebounce <= 0) {
+            this.isRagdoll = true;
+            this.ragdollTimer = 2.0;
+            this.ragdollDebounce = 1.0;
+        }
+
+        // 4. Jump Logic
+        if (this.input.keys.jump && this.isGrounded && this.jumpCooldown <= 0) {
             this.body.velocity.y = this.params.jumpForce;
-            this.jumpCooldown = 0.25; // slightly longer to ensuring clear separation
-            this.input.keys.jump = false; // Consume input to prevent hold-to-jump
-        }
-        // 5. Anti-Fly / Ground Snapping
-        // If we are grounded and NOT passing the jump cooldown/check, ensure we don't fly up due to physics glitches
-        if (this.isGrounded && this.jumpCooldown <= 0) {
-            // If the physics engine pushes us up (velocity.y > 0), clamp it.
-            // But allow small positive velocity if needed for slopes (though we don't have slopes)?
-            // Safest: Hard clamp to 0 or very small negative to keep grounded only if not effectively jumping
-            if (this.body.velocity.y > 0) {
-                this.body.velocity.y = 0;
-                this.body.velocity.y = 0;
-            }
+            this.jumpCooldown = 0.25;
+            this.input.keys.jump = false;
+            this.body.wakeUp();
         }
     }
 
