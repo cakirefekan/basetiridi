@@ -35,9 +35,28 @@ function saveUsers(users) {
 }
 
 // Game State
-const players = {}; // socket.id -> player data
+// Game State
 const onlineUsers = {}; // userId -> socket.id (For single session enforcement)
-const worldObjects = {}; // objectId -> { id, position, quaternion, velocity, angularVelocity }
+
+// Room-based state
+const rooms = {
+    default: {
+        players: {},
+        objects: {}
+    },
+    football: {
+        players: {},
+        objects: {}
+    }
+};
+
+// Ensure room exists helper
+function getRoom(roomName) {
+    if (!rooms[roomName]) {
+        rooms[roomName] = { players: {}, objects: {} };
+    }
+    return rooms[roomName];
+}
 
 // --- Auth Routes ---
 
@@ -103,7 +122,9 @@ io.on('connection', (socket) => {
 
     // Waiting for 'join-game' event with user credentials to actually spawn
     socket.on('join-game', (userData) => {
-        const { username, nickname, skin } = userData;
+        const { username, nickname, skin, map } = userData;
+        const roomName = map || 'default';
+        const room = getRoom(roomName);
 
         // Single Session Check
         if (onlineUsers[username]) {
@@ -112,26 +133,27 @@ io.on('connection', (socket) => {
             // Only kick if it's a different socket (reconnects might send same?)
             if (oldSocketId !== socket.id) {
                 io.to(oldSocketId).emit('force-disconnect', 'Logged in from another location');
-                // Also clean up old player from game
-                if (players[oldSocketId]) {
-                    delete players[oldSocketId];
-                    io.emit('player-left', oldSocketId);
-                }
+
+                // Cleanup old if needed (though disconnect handler does it too)
             }
         }
 
         // Register new session
         onlineUsers[username] = socket.id;
-        socket.username = username; // Tag socket for disconnect handler
+        socket.username = username;
+        socket.roomName = roomName; // Track room on socket
 
-        // Send existing players to new player
-        socket.emit('current-players', players);
+        // Join Socket Room
+        socket.join(roomName);
 
-        // Send current World State (Interactables)
-        socket.emit('current-objects', worldObjects);
+        // Send existing players IN THIS ROOM
+        socket.emit('current-players', room.players);
+
+        // Send current World State IN THIS ROOM
+        socket.emit('current-objects', room.objects);
 
         // Create new player entry
-        players[socket.id] = {
+        room.players[socket.id] = {
             id: socket.id,
             username: username,
             nickname: nickname,
@@ -141,43 +163,46 @@ io.on('connection', (socket) => {
             action: 'idle'
         };
 
-        // Broadcast new player join
-        socket.broadcast.emit('player-joined', players[socket.id]);
+        // Broadcast new player join to ROOM ONLY
+        socket.to(roomName).emit('player-joined', room.players[socket.id]);
 
-        console.log(`User ${username} joined game as ${nickname}`);
+        console.log(`User ${username} joined room [${roomName}] as ${nickname}`);
     });
 
     socket.on('player-update', (data) => {
-        if (players[socket.id]) {
+        const roomName = socket.roomName;
+        if (roomName && rooms[roomName] && rooms[roomName].players[socket.id]) {
             // Update state
-            players[socket.id] = { ...players[socket.id], ...data };
-            // If skin changed in-game, update DB? 
-            // Better to handle that via explicit API call, but we can sync visual state here.
-
-            socket.broadcast.emit('player-update', players[socket.id]);
+            rooms[roomName].players[socket.id] = { ...rooms[roomName].players[socket.id], ...data };
+            // Broadcast to room
+            socket.to(roomName).emit('player-update', rooms[roomName].players[socket.id]);
         }
     });
 
     socket.on('object-update', (data) => {
+        const roomName = socket.roomName;
+        if (!roomName) return;
+
+        const room = getRoom(roomName);
+
         // data: { id, position, quaternion, velocity, angularVelocity }
-        if (!worldObjects[data.id]) {
-            worldObjects[data.id] = { ...data, owner: socket.id };
+        if (!room.objects[data.id]) {
+            room.objects[data.id] = { ...data, owner: socket.id };
         } else {
-            // Sahiplik kontrolü: Eğer sahibi yoksa veya sahibi güncelleyen kişiyse güncelle
-            // Veya her güncellemede sahibi "en son güncelleyen" yap (Soft Ownership)
-            worldObjects[data.id] = { ...data, owner: socket.id };
+            room.objects[data.id] = { ...data, owner: socket.id };
         }
 
-        // Diğer oyunculara sahibiyle birlikte gönder
-        socket.broadcast.emit('object-update', { ...data, owner: socket.id });
+        // Broadcast to room
+        socket.to(roomName).emit('object-update', { ...data, owner: socket.id });
     });
 
     socket.on('disconnect', () => {
         console.log('Socket disconnected:', socket.id);
+        const roomName = socket.roomName;
 
-        if (players[socket.id]) {
-            delete players[socket.id];
-            io.emit('player-left', socket.id);
+        if (roomName && rooms[roomName] && rooms[roomName].players[socket.id]) {
+            delete rooms[roomName].players[socket.id];
+            io.to(roomName).emit('player-left', socket.id);
         }
 
         // Remove from onlineUsers map if it matches
