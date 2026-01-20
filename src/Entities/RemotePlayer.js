@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import * as CANNON from 'cannon-es';
 import { FaceGenerator } from '../Utils/FaceGenerator.js';
 
 export class RemotePlayer {
@@ -200,6 +201,9 @@ export class RemotePlayer {
         if (objectId && this.game.interactables && this.game.interactables[objectId]) {
             const obj = this.game.interactables[objectId];
             if (obj.mesh) {
+                // Ensure userData exists
+                if (!obj.mesh.userData) obj.mesh.userData = {};
+
                 // Store original material if not already stored
                 if (!obj.mesh.userData.originalMaterial) {
                     obj.mesh.userData.originalMaterial = obj.mesh.material;
@@ -221,7 +225,8 @@ export class RemotePlayer {
     clearHoldingHighlight(objectId) {
         if (this.game.interactables && this.game.interactables[objectId]) {
             const obj = this.game.interactables[objectId];
-            if (obj.mesh && obj.mesh.userData.originalMaterial) {
+            // Safe check for mesh and userData
+            if (obj && obj.mesh && obj.mesh.userData && obj.mesh.userData.originalMaterial) {
                 obj.mesh.material = obj.mesh.userData.originalMaterial;
             }
         }
@@ -297,6 +302,7 @@ export class RemotePlayer {
         }
 
         this.animate(deltaTime);
+        this.updatePhysicsBody();
     }
 
     // Override createMesh to bake offset?
@@ -382,6 +388,40 @@ export class RemotePlayer {
 
     destroy() {
         this.scene.remove(this.mesh);
-        // dispose materials/geometry...
+        // Remove physics body
+        if (this.body) {
+            this.game.physics.world.removeBody(this.body);
+        }
+    }
+
+    updatePhysicsBody() {
+        // Create hitbody lazily
+        if (!this.body) {
+            const shape = new THREE.SphereGeometry(0.4).parameters.radius; // 0.4 radius matches Player.js
+            const sphere = new CANNON.Sphere(0.4);
+            this.body = new CANNON.Body({
+                mass: 0, // Kinematic (infinite mass)
+                type: CANNON.Body.KINEMATIC,
+                position: new CANNON.Vec3(this.mesh.position.x, this.mesh.position.y + 0.85, this.mesh.position.z), // Offset back to center (+0.85 up from feet)
+                shape: sphere
+            });
+            // Set collision filter if needed, for now default
+            this.game.physics.world.addBody(this.body);
+        }
+
+        // Update position to match visual (interpolated) position
+        // Visual mesh root is at Feet. Physics Body center is at +0.85 (Torso/Center)
+        // Actually Player.js physics body is at (0, 0.4, 0).
+        // RemotePlayer visual is offset by -0.85.
+        // So if Visual Y is 0 (feet on ground), Physics Y should be 0.85?
+        // Let's match Player.js: Body.pos is the truth. Mesh.pos = Body.pos + (-0.85).
+        // So Body.pos = Mesh.pos - (-0.85) = Mesh.pos + 0.85.
+
+        // However, RemotePlayer.mesh.position is driven by this.anchorPosition which IS the physics position from the server!
+        // wait, this.anchorPosition IS the body position from the remote client.
+        // So we can just copy anchorPosition.
+
+        this.body.position.copy(this.anchorPosition);
+        this.body.quaternion.setFromEuler(0, this.mesh.rotation.y, 0);
     }
 }
