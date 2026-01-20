@@ -165,7 +165,8 @@ export class FootballWorld {
         const body = new CANNON.Body({
             mass: mass,
             shape: shape,
-            material: this.physics.materials.object // Bouncy material
+            material: this.physics.materials.object, // Bouncy material
+            type: CANNON.Body.KINEMATIC // Start Kinematic to wait for network sync!
         });
         body.position.set(0, 5, 0);
         body.linearDamping = 0.3; // Rolling resistance
@@ -180,6 +181,8 @@ export class FootballWorld {
         // Init userData for Cannon Body
         if (!body.userData) body.userData = {};
         body.userData.id = id;
+        // Give it a grace period (500ms) to receive initial network data before gravity takes over
+        body.userData.lastNetworkUpdate = Date.now();
 
         // Register interactable
         if (!this.game.interactables) this.game.interactables = {};
