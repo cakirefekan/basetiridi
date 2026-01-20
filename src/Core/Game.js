@@ -72,8 +72,12 @@ export class Game {
 
     tick() {
         const elapsedTime = this.clock.getElapsedTime();
-        const deltaTime = elapsedTime - this.previousTime;
+        let deltaTime = elapsedTime - this.previousTime;
         this.previousTime = elapsedTime;
+
+        // Best Practice: Cap deltaTime to prevent physics explosions if tab sleeps or frame drops
+        // Max 0.1s (10 fps) ensures physics solver doesn't panic
+        deltaTime = Math.min(deltaTime, 0.1);
 
         // Updates
         this.input.update();
