@@ -412,8 +412,13 @@ export class NetworkManager {
                 }
             }
 
-            // Send update if object needs syncing
-            if (tracking.isActive || isHeld) {
+            // Send update ONLY if we have Local Authority
+            // We claim authority on collision or pickup (see handleCollision / pickupObject)
+            const hasAuthority = tracking.isActive || isHeld;
+
+            // Critical Fix: Do NOT send updates if we are not the authoritative owner
+            // This prevents 10 clients from spamming updates for the same ball, killing bandwidth/latency.
+            if (hasAuthority) {
                 this.sendObjectUpdate(body);
             }
         });
