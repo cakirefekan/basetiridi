@@ -220,7 +220,12 @@ export class NetworkManager {
         });
 
         // Prune buffer
-        while (body.userData.updateBuffer.length > 20 && body.userData.updateBuffer[0].timestamp < now - 1000) {
+        // 1. Remove old snapshots (older than 1s)
+        while (body.userData.updateBuffer.length > 0 && body.userData.updateBuffer[0].timestamp < now - 1000) {
+            body.userData.updateBuffer.shift();
+        }
+        // 2. Safety Hard Cap (Prevent infinite growth if clocks are weird)
+        while (body.userData.updateBuffer.length > 60) {
             body.userData.updateBuffer.shift();
         }
     }
