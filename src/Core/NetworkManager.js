@@ -135,22 +135,30 @@ export class NetworkManager {
         const obj = this.game.interactables[data.id];
         const body = obj.body;
 
-        // Authority check
+        // --- PROXIMITY CHECK ---
+        let distToPlayer = 1000;
+        if (this.game.player && this.game.player.body) {
+            const p = this.game.player.body.position;
+            const o = body.position;
+            distToPlayer = Math.sqrt((p.x - o.x) ** 2 + (p.y - o.y) ** 2 + (p.z - o.z) ** 2);
+        }
+
+        // If Close (5m) OR Locally Controlled -> Dynamic & Skip Interpolation
+        const isClose = distToPlayer < 5.0;
         const isLocallyControlled = this.game.player && this.game.player.holdingObject === body;
         const hasRecentLocalInteraction = this.trackedObjects[data.id] && this.trackedObjects[data.id].isActive;
 
-        // If the server says someone else is the owner
-        const isRemoteOwned = data.owner && data.owner !== this.socket.id;
-
-        if (isLocallyControlled || hasRecentLocalInteraction) {
+        if (isLocallyControlled || hasRecentLocalInteraction || isClose) {
             if (body.type !== CANNON.Body.DYNAMIC) {
                 body.type = CANNON.Body.DYNAMIC;
                 body.wakeUp();
             }
+            // Do not apply remote data if we are close/interacting
             return;
         }
 
         // Remote owned -> Kinematic
+        const isRemoteOwned = data.owner && data.owner !== this.socket.id;
         if (isRemoteOwned) {
             if (body.type !== CANNON.Body.KINEMATIC) {
                 body.type = CANNON.Body.KINEMATIC;
@@ -158,7 +166,7 @@ export class NetworkManager {
                 body.angularVelocity.set(0, 0, 0);
             }
         } else {
-            // No owner -> Dynamic
+            // No owner -> Dynamic (but if far, it might sleep)
             if (body.type !== CANNON.Body.DYNAMIC) {
                 body.type = CANNON.Body.DYNAMIC;
                 body.wakeUp();
@@ -181,7 +189,7 @@ export class NetworkManager {
         if (posDiffSq > 2.25) { // dist > 1.5, Snap immediately
             body.position.set(data.position.x, data.position.y, data.position.z);
             body.quaternion.set(data.quaternion.x, data.quaternion.y, data.quaternion.z, data.quaternion.w);
-            body.userData.updateBuffer = []; // Clear buffer to reset interpolation
+            body.userData.updateBuffer = [];
         }
 
         // Push to buffer
@@ -205,6 +213,11 @@ export class NetworkManager {
         const INTERP_DELAY = 100; // ms latency buffer
         const renderTime = Date.now() - INTERP_DELAY;
 
+        let playerPos = null;
+        if (this.game.player && this.game.player.body) {
+            playerPos = this.game.player.body.position;
+        }
+
         Object.keys(this.game.interactables).forEach(objectId => {
             const obj = this.game.interactables[objectId];
             if (!obj || !obj.body) return;
@@ -217,7 +230,13 @@ export class NetworkManager {
             const isLocallyControlled = this.game.player && this.game.player.holdingObject === body;
             const hasRecentLocalInteraction = this.trackedObjects[objectId] && this.trackedObjects[objectId].isActive;
 
-            if (isLocallyControlled || hasRecentLocalInteraction) return;
+            let isClose = false;
+            if (playerPos) {
+                const d2 = (playerPos.x - body.position.x) ** 2 + (playerPos.y - body.position.y) ** 2 + (playerPos.z - body.position.z) ** 2;
+                if (d2 < 25.0) isClose = true;
+            }
+
+            if (isLocallyControlled || hasRecentLocalInteraction || isClose) return;
 
             // Only interpolate if KINEMATIC (Remote controlled)
             // If Dynamic, physics engine handles it (unless we want to soft-correct?)
