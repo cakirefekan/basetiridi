@@ -47,6 +47,13 @@ export class NetworkManager {
         // If player collided with an interactable object, claim authority
         if (objectBody && objectBody.userData?.id) {
             this.markObjectForSync(objectBody.userData.id, 0.3); // Very short authority claim for collisions
+
+            // Force Dynamic immediately so we can push it locally!
+            // If it was Kinematic (from remote), this breaks the lock and lets physics solve the collision.
+            if (objectBody.type !== CANNON.Body.DYNAMIC) {
+                objectBody.type = CANNON.Body.DYNAMIC;
+                objectBody.wakeUp();
+            }
         }
     }
 
@@ -103,12 +110,18 @@ export class NetworkManager {
         });
 
         this.socket.on('object-update', (data) => {
+            if (this.game.interactables && this.game.interactables[data.id] && this.game.interactables[data.id].body) {
+                this.game.interactables[data.id].body.userData.lastNetworkUpdate = Date.now();
+            }
             this.updateObjectState(data);
         });
 
         this.socket.on('current-objects', (objects) => {
             if (!objects) return;
             Object.values(objects).forEach(data => {
+                if (this.game.interactables && this.game.interactables[data.id] && this.game.interactables[data.id].body) {
+                    this.game.interactables[data.id].body.userData.lastNetworkUpdate = Date.now();
+                }
                 this.updateObjectState(data);
             });
         });
@@ -312,6 +325,9 @@ export class NetworkManager {
         // Interpolate remote objects to their network target state
         this.interpolateNetworkObjects(deltaTime);
 
+        // Check for remote authority timeouts
+        this.checkRemoteTimeouts();
+
         // Sync objects at controlled rate
         this.objectSyncTimer += deltaTime;
         if (this.objectSyncTimer >= this.objectSyncRate) {
@@ -367,6 +383,35 @@ export class NetworkManager {
             // Send update if object needs syncing
             if (tracking.isActive || isHeld) {
                 this.sendObjectUpdate(body);
+            }
+        });
+    }
+
+    checkRemoteTimeouts() {
+        if (!this.game.interactables) return;
+        const now = Date.now();
+        const TIMEOUT_MS = 500; // Release authority if no updates for 500ms
+
+        Object.keys(this.game.interactables).forEach(objectId => {
+            const obj = this.game.interactables[objectId];
+            if (!obj || !obj.body) return;
+            const body = obj.body;
+
+            // Skip if locally controlled/held
+            const isLocallyControlled = this.game.player && this.game.player.holdingObject === body;
+            const tracking = this.trackedObjects[objectId];
+            const hasRecentLocalInteraction = tracking && tracking.isActive;
+
+            if (isLocallyControlled || hasRecentLocalInteraction) return;
+
+            // If it is Kinematic (Remote Controlled), check if it timed out
+            if (body.type === CANNON.Body.KINEMATIC) {
+                const lastUpdate = body.userData.lastNetworkUpdate || 0;
+                if (now - lastUpdate > TIMEOUT_MS) {
+                    // Revert to dynamic so it settles/sleeps or can be pushed
+                    body.type = CANNON.Body.DYNAMIC;
+                    body.wakeUp(); // Wake to settle
+                }
             }
         });
     }
