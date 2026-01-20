@@ -186,7 +186,9 @@ export class NetworkManager {
             body.userData.updateBuffer = [];
         }
 
-        // Snap if too far
+        // Snap if too far (Teleport threshold)
+        // INCREASED from 1.5m (2.25) to 10m (100) to prevent stuttering on fast shots
+        // Fast balls travel >1.5m between updates, causing constant snapping.
         const dx = body.position.x - data.position.x;
         const dy = body.position.y - data.position.y;
         const dz = body.position.z - data.position.z;
@@ -194,7 +196,7 @@ export class NetworkManager {
 
         const now = Date.now();
 
-        if (posDiffSq > 2.25) { // dist > 1.5, Snap immediately
+        if (posDiffSq > 100.0) { // dist > 10m, Only Snap if HUGE jump
             body.position.set(data.position.x, data.position.y, data.position.z);
             body.quaternion.set(data.quaternion.x, data.quaternion.y, data.quaternion.z, data.quaternion.w);
             body.userData.updateBuffer = [];
@@ -287,11 +289,23 @@ export class NetworkManager {
                 body.wakeUp();
 
             } else if (buffer.length > 0) {
-                // Fallback: Latest
+                // EXTRAPOLATION (Dead Reckoning)
+                // If we ran out of buffer (lag spike), predict where object should be based on velocity.
+
                 const newest = buffer[buffer.length - 1];
-                // Only snap if we are waiting for future data (lagging behind real time but ahead of buffer)
-                // If we are strictly behind buffer (renderTime < oldest), we wait.
-                if (renderTime > newest.timestamp) {
+                const timeSinceNewest = (renderTime - newest.timestamp) / 1000; // seconds
+
+                if (timeSinceNewest > 0 && timeSinceNewest < 0.5) { // Cap extrapolation at 500ms to prevent huge drifts
+                    if (!this._tempVec) this._tempVec = new CANNON.Vec3();
+
+                    // Predict: Pos = LastPos + (Vel * time)
+                    // Note: simplistic linear prediction ignoring gravity/collision, but good for short gaps.
+                    newest.velocity.scale(timeSinceNewest, this._tempVec);
+                    newest.position.vadd(this._tempVec, body.position);
+
+                    body.quaternion.copy(newest.quaternion); // Rotation prediction is harder, just copy
+                } else {
+                    // Too old to predict, just snap
                     body.position.copy(newest.position);
                     body.quaternion.copy(newest.quaternion);
                 }
