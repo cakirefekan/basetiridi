@@ -582,16 +582,75 @@ export class Player {
             this.mesh.position.copy(this.body.position);
 
             // Correct Visual Offset
-            let yOffset = -this.params.radius - 0.45; // Align feet to bottom of sphere (slightly sunk to avoid floating visual)
+            let yOffset = -this.params.radius - 0.45;
 
-            // Lift up if ragdolling to prevent clipping
             if (this.isRagdoll) {
-                // Standing was -0.8. Ragdoll needs to be around -0.2 to sit on back.
-                // So we add 0.6 to lift it up from foot-level to back-level.
                 yOffset += 0.6;
             }
 
             this.mesh.position.y += yOffset;
+        }
+
+        // --- CAMERA COLLISION LOGIC ---
+        // Prevent camera from clipping through walls
+        if (this.camera && this.pitchObject) {
+            // 1. Get the world position of the pivot (Neck)
+            const pivotPos = new THREE.Vector3();
+            this.pitchObject.getWorldPosition(pivotPos);
+
+            // 2. Calculate ideal camera position based on offset (Standard boom length)
+            // Clone the offset logic from initCamera: new THREE.Vector3(1.0, 0.5, 5) rotated by rig
+            // Actually, simply:
+            const idealLocalPos = this.cameraOffset.clone();
+            const idealWorldPos = idealLocalPos.clone().applyMatrix4(this.pitchObject.matrixWorld);
+
+            // 3. Raycast from Pivot to Ideal Position using Cannon (Physics World)
+            // We use Cannon raycast because walls are physical bodies.
+
+            // Convert to Cannon Vec3
+            const start = new CANNON.Vec3(pivotPos.x, pivotPos.y, pivotPos.z);
+            const end = new CANNON.Vec3(idealWorldPos.x, idealWorldPos.y, idealWorldPos.z);
+
+            const result = new CANNON.RaycastResult();
+
+            if (this.physics && this.physics.world) {
+                // Raycast
+                const hasHit = this.physics.world.raycastClosest(start, end, {
+                    skipBackfaces: true,
+                    collisionFilterMask: 1 // Only collide with Static Environment (Group 1) ideally, or Default
+                    // Note: We need to make sure we don't hit the Player itself! Player body should be ignored.
+                }, result);
+
+                if (hasHit && result.body !== this.body) {
+                    // Hit wall!
+                    // Move camera to hit point (slightly buffered)
+                    // We need to set the LOCAL position of the camera relative to pitchObject
+
+                    // Distance actual
+                    const hitDist = result.distance;
+                    // Clamp min distance (0.5m) to avoid going inside head
+                    const safeDist = Math.max(0.5, hitDist - 0.2);
+
+                    // Simple approach: Scale the z-distance of the camera?
+                    // Since cameraOffset is (1.0, 0.5, 5), it's complex.
+                    // Easiest: Just interpolate Position between Pivot(0,0,0) and Offset
+
+                    // Ratio of distance
+                    const fullDist = Math.sqrt(idealLocalPos.x ** 2 + idealLocalPos.y ** 2 + idealLocalPos.z ** 2); // Approx 5.2
+                    // But raycast distance is in World Units.
+
+                    // Let's just Lerp the Camera Position towards 0,0,0 based on hit fraction
+                    // Fraction = hitDist / Distance(Start, End)
+                    const totalDist = start.distanceTo(end);
+                    const fraction = Math.max(0.1, (hitDist - 0.2) / totalDist); // -0.2 buffer
+
+                    this.camera.position.lerpVectors(new THREE.Vector3(0, 0, 0), this.cameraOffset, fraction);
+                } else {
+                    // No hit, restore to full offset
+                    // Lerp back smoothly for nice feel
+                    this.camera.position.lerp(this.cameraOffset, 0.2);
+                }
+            }
         }
     }
 
