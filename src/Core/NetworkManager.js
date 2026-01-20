@@ -136,7 +136,6 @@ export class NetworkManager {
         const body = obj.body;
 
         // Authority check
-        // We are the owner if the data came from us (rare in broadcast) or if we are currently holding/interacting
         const isLocallyControlled = this.game.player && this.game.player.holdingObject === body;
         const hasRecentLocalInteraction = this.trackedObjects[data.id] && this.trackedObjects[data.id].isActive;
 
@@ -144,8 +143,6 @@ export class NetworkManager {
         const isRemoteOwned = data.owner && data.owner !== this.socket.id;
 
         if (isLocallyControlled || hasRecentLocalInteraction) {
-            // We have authority, ignore remote updates
-            // (We should probably also force DYNAMIC here, but usually it is)
             if (body.type !== CANNON.Body.DYNAMIC) {
                 body.type = CANNON.Body.DYNAMIC;
                 body.wakeUp();
@@ -153,7 +150,7 @@ export class NetworkManager {
             return;
         }
 
-        // If it's remote owned, make it kinematic to prevent local physics interference
+        // Remote owned -> Kinematic
         if (isRemoteOwned) {
             if (body.type !== CANNON.Body.KINEMATIC) {
                 body.type = CANNON.Body.KINEMATIC;
@@ -161,102 +158,114 @@ export class NetworkManager {
                 body.angularVelocity.set(0, 0, 0);
             }
         } else {
-            // Nobody owns it or we are the owner (but not currently interacting)
-            // Bring it back to dynamic so it can fall/move locally
+            // No owner -> Dynamic
             if (body.type !== CANNON.Body.DYNAMIC) {
                 body.type = CANNON.Body.DYNAMIC;
                 body.wakeUp();
             }
         }
 
-        // Position Difference check (Snap if too far)
+        // Initialize Buffer if needed
+        if (!body.userData.updateBuffer) {
+            body.userData.updateBuffer = [];
+        }
+
+        // Snap if too far
         const dx = body.position.x - data.position.x;
         const dy = body.position.y - data.position.y;
         const dz = body.position.z - data.position.z;
         const posDiffSq = dx * dx + dy * dy + dz * dz;
 
-        if (posDiffSq > 2.25) { // dist > 1.5
+        const now = Date.now();
+
+        if (posDiffSq > 2.25) { // dist > 1.5, Snap immediately
             body.position.set(data.position.x, data.position.y, data.position.z);
             body.quaternion.set(data.quaternion.x, data.quaternion.y, data.quaternion.z, data.quaternion.w);
-            return;
+            body.userData.updateBuffer = []; // Clear buffer to reset interpolation
         }
 
-        // Store target state for interpolation
-        if (!body.userData.networkTarget) {
-            body.userData.networkTarget = {
-                position: new CANNON.Vec3(),
-                quaternion: new CANNON.Quaternion(),
-                velocity: new CANNON.Vec3(),
-                angularVelocity: new CANNON.Vec3()
-            };
-        }
+        // Push to buffer
+        body.userData.updateBuffer.push({
+            timestamp: now,
+            position: new CANNON.Vec3(data.position.x, data.position.y, data.position.z),
+            quaternion: new CANNON.Quaternion(data.quaternion.x, data.quaternion.y, data.quaternion.z, data.quaternion.w),
+            velocity: new CANNON.Vec3(data.velocity.x, data.velocity.y, data.velocity.z),
+            angularVelocity: new CANNON.Vec3(data.angularVelocity.x, data.angularVelocity.y, data.angularVelocity.z)
+        });
 
-        const target = body.userData.networkTarget;
-        target.position.set(data.position.x, data.position.y, data.position.z);
-        target.quaternion.set(data.quaternion.x, data.quaternion.y, data.quaternion.z, data.quaternion.w);
-        target.velocity.set(data.velocity.x, data.velocity.y, data.velocity.z);
-        target.angularVelocity.set(data.angularVelocity.x, data.angularVelocity.y, data.angularVelocity.z);
+        // Prune buffer
+        while (body.userData.updateBuffer.length > 20 && body.userData.updateBuffer[0].timestamp < now - 1000) {
+            body.userData.updateBuffer.shift();
+        }
     }
 
     interpolateNetworkObjects(deltaTime) {
-        // Called from update() - smoothly interpolate objects to network state
         if (!this.game.interactables) return;
+
+        const INTERP_DELAY = 100; // ms latency buffer
+        const renderTime = Date.now() - INTERP_DELAY;
 
         Object.keys(this.game.interactables).forEach(objectId => {
             const obj = this.game.interactables[objectId];
             if (!obj || !obj.body) return;
 
             const body = obj.body;
-            const target = body.userData.networkTarget;
 
-            if (!target) return;
+            // Skip if no buffer or locally controlled
+            if (!body.userData.updateBuffer || body.userData.updateBuffer.length === 0) return;
 
-            // Authority check
             const isLocallyControlled = this.game.player && this.game.player.holdingObject === body;
             const hasRecentLocalInteraction = this.trackedObjects[objectId] && this.trackedObjects[objectId].isActive;
 
-            if (isLocallyControlled || hasRecentLocalInteraction) {
-                return; // Skip interpolation for locally controlled objects
+            if (isLocallyControlled || hasRecentLocalInteraction) return;
+
+            // Only interpolate if KINEMATIC (Remote controlled)
+            // If Dynamic, physics engine handles it (unless we want to soft-correct?)
+            if (body.type !== CANNON.Body.KINEMATIC) return; // Allow dynamics to sleep/settle if not owned
+
+            const buffer = body.userData.updateBuffer;
+            let p0 = null;
+            let p1 = null;
+
+            // Find relevant frames
+            for (let i = 0; i < buffer.length - 1; i++) {
+                if (buffer[i].timestamp <= renderTime && buffer[i + 1].timestamp >= renderTime) {
+                    p0 = buffer[i];
+                    p1 = buffer[i + 1];
+                    break;
+                }
             }
 
-            // Smoothing
-            const lerpFactor = Math.min(deltaTime * 25.0, 1.0);
+            if (p0 && p1) {
+                const total = p1.timestamp - p0.timestamp;
+                const diff = renderTime - p0.timestamp;
+                const factor = total > 0 ? diff / total : 0;
 
-            // Store current as previous to keep Cannon.js internal integrator happy
-            body.previousPosition.copy(body.position);
-            body.previousQuaternion.copy(body.quaternion);
+                // Interpolate Position
+                const newPos = new CANNON.Vec3();
+                p0.position.lerp(p1.position, factor, newPos);
+                body.position.copy(newPos);
 
-            // Interpolate position
-            body.position.x += (target.position.x - body.position.x) * lerpFactor;
-            body.position.y += (target.position.y - body.position.y) * lerpFactor;
-            body.position.z += (target.position.z - body.position.z) * lerpFactor;
+                // Interpolate Quaternion
+                const newQuat = new CANNON.Quaternion();
+                p0.quaternion.slerp(p1.quaternion, factor, newQuat);
+                body.quaternion.copy(newQuat);
 
-            // Quaternion interpolation
-            body.quaternion.x += (target.quaternion.x - body.quaternion.x) * lerpFactor;
-            body.quaternion.y += (target.quaternion.y - body.quaternion.y) * lerpFactor;
-            body.quaternion.z += (target.quaternion.z - body.quaternion.z) * lerpFactor;
-            body.quaternion.w += (target.quaternion.w - body.quaternion.w) * lerpFactor;
-            body.quaternion.normalize();
+                // Update Velocity (for handover)
+                body.velocity.copy(p1.velocity);
+                body.angularVelocity.copy(p1.angularVelocity);
 
-            // Direct Velocity sync (Velocity doesn't need much lerp, it drive the physics)
-            body.velocity.x = target.velocity.x;
-            body.velocity.y = target.velocity.y;
-            body.velocity.z = target.velocity.z;
-
-            body.angularVelocity.x = target.angularVelocity.x;
-            body.angularVelocity.y = target.angularVelocity.y;
-            body.angularVelocity.z = target.angularVelocity.z;
-
-            // Handle Sleeping
-            const isMoving = Math.abs(body.velocity.x) > 0.05 ||
-                Math.abs(body.velocity.y) > 0.05 ||
-                Math.abs(body.velocity.z) > 0.05;
-
-            if (isMoving) {
                 body.wakeUp();
-            } else if (body.velocity.x === 0 && body.velocity.y === 0 && body.velocity.z === 0) {
-                // If network says it's dead still, allow it to sleep locally
-                body.sleep();
+
+            } else if (buffer.length > 0) {
+                // Fallback: Latest
+                const newest = buffer[buffer.length - 1];
+                // Only snap if we are waiting for future data (lagging behind real time but ahead of buffer)
+                // If we are strictly behind buffer (renderTime < oldest), we wait.
+                if (renderTime > newest.timestamp) {
+                    body.position.copy(newest.position);
+                    body.quaternion.copy(newest.quaternion);
+                }
             }
         });
     }
