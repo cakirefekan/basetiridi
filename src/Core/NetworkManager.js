@@ -1,4 +1,5 @@
 import { io } from 'socket.io-client';
+import * as CANNON from 'cannon-es';
 import { RemotePlayer } from '../Entities/RemotePlayer.js';
 
 export class NetworkManager {
