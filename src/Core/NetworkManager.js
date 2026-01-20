@@ -264,14 +264,16 @@ export class NetworkManager {
                 const factor = total > 0 ? diff / total : 0;
 
                 // Interpolate Position
-                const newPos = new CANNON.Vec3();
-                p0.position.lerp(p1.position, factor, newPos);
-                body.position.copy(newPos);
+                // Best Practice: Reuse Vectors to reduce Garbage Collection
+                if (!this._tempVec) this._tempVec = new CANNON.Vec3();
+                if (!this._tempQuat) this._tempQuat = new CANNON.Quaternion();
+
+                p0.position.lerp(p1.position, factor, this._tempVec);
+                body.position.copy(this._tempVec);
 
                 // Interpolate Quaternion
-                const newQuat = new CANNON.Quaternion();
-                p0.quaternion.slerp(p1.quaternion, factor, newQuat);
-                body.quaternion.copy(newQuat);
+                p0.quaternion.slerp(p1.quaternion, factor, this._tempQuat);
+                body.quaternion.copy(this._tempQuat);
 
                 // Update Velocity (for handover)
                 body.velocity.copy(p1.velocity);
