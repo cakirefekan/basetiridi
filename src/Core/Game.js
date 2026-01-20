@@ -32,7 +32,7 @@ export class Game {
         // Modules
         this.input = new InputManager();
         this.physics = new PhysicsWorld();
-        this.world = new World(this);
+
         this.player = new Player(this);
         this.network = new NetworkManager(this);
         this.help = new HelpManager(this);
@@ -45,7 +45,20 @@ export class Game {
         this.previousTime = 0;
     }
 
-    start() {
+    async init() {
+        // Check URL for Map Selection
+        if (window.location.pathname === '/football') {
+            const { FootballWorld } = await import('../World/FootballWorld.js');
+            this.world = new FootballWorld(this);
+            this.mapName = 'football';
+        } else {
+            this.world = new World(this);
+            this.mapName = 'default';
+        }
+    }
+
+    async start() {
+        await this.init();
         this.tick();
     }
 
