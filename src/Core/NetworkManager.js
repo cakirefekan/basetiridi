@@ -77,8 +77,11 @@ export class NetworkManager {
             console.log('Connected to server with ID:', this.socket.id);
             this.isConnected = true;
 
-            // Send Join Request with Auth Data
-            this.socket.emit('join-game', userData);
+            // Send Join Request with Auth Data and Map Name
+            this.socket.emit('join-game', {
+                ...userData,
+                map: this.game.mapName || 'default'
+            });
         });
 
         this.socket.on('force-disconnect', (reason) => {
