@@ -201,8 +201,24 @@ io.on('connection', (socket) => {
         const roomName = socket.roomName;
 
         if (roomName && rooms[roomName] && rooms[roomName].players[socket.id]) {
+            // 1. Remove Player
             delete rooms[roomName].players[socket.id];
             io.to(roomName).emit('player-left', socket.id);
+
+            // 2. Clear Ownership of any objects held by this player
+            // This prevents "Ghost Objects" that wait for updates from a dead socket
+            const roomObjects = rooms[roomName].objects;
+            if (roomObjects) {
+                Object.keys(roomObjects).forEach(objId => {
+                    if (roomObjects[objId].owner === socket.id) {
+                        roomObjects[objId].owner = null;
+                        // Optional: Notify room that object is free?
+                        // The next update from a new owner will handle it, or clients will timeout.
+                        // But setting it to null here ensures new joiners (current-objects) see it as free.
+                        io.to(roomName).emit('object-update', { ...roomObjects[objId], owner: null });
+                    }
+                });
+            }
         }
 
         // Remove from onlineUsers map if it matches
