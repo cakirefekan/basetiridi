@@ -176,6 +176,9 @@ export class FootballWorld {
         // Link
         const id = 'football_01'; // Unique ID
         mesh.userData.id = id;
+
+        // Init userData for Cannon Body
+        if (!body.userData) body.userData = {};
         body.userData.id = id;
 
         // Register interactable
