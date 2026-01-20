@@ -47,7 +47,7 @@ export class NetworkManager {
 
         // If player collided with an interactable object, claim authority
         if (objectBody && objectBody.userData?.id) {
-            this.markObjectForSync(objectBody.userData.id, 0.3); // Very short authority claim for collisions
+            this.markObjectForSync(objectBody.userData.id, 1.5); // Increased to 1.5s to keep control while dribbling
 
             // Force Dynamic immediately so we can push it locally!
             // If it was Kinematic (from remote), this breaks the lock and lets physics solve the collision.
@@ -137,6 +137,14 @@ export class NetworkManager {
 
         const obj = this.game.interactables[data.id];
         const body = obj.body;
+
+        // --- CRITICAL BUSINESS LOGIC FIX: ECHO PREVENTION ---
+        // If the server sends an update that says "Owner is ME", it means this is my own data
+        // returning from a round-trip (RTT). Since I am simulating locally in real-time,
+        // my local state is ALWAYS more current than this echo. We must ignore it.
+        if (data.owner === this.socket.id) {
+            return;
+        }
 
         // --- PROXIMITY CHECK ---
         let distToPlayer = 1000;
