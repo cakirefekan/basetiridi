@@ -388,11 +388,13 @@ export class Player {
 
         if (this.isGrounded) {
             accel = 150.0; // Snappy acceleration
-            friction = 50.0; // High friction for immediate stops
+            friction = 20.0; // Balanced friction (was 50 which caused sticky stops)
+            this.airTime = 0; // Reset air time
         } else {
             // Air Control
-            accel = 20.0; // Low air control
-            friction = 0.5; // Preserve air momentum
+            accel = 20.0;
+            friction = 0.5;
+            this.airTime = (this.airTime || 0) + deltaTime;
         }
 
         // Apply Forces
@@ -422,18 +424,17 @@ export class Player {
 
         } else {
             // Decelerate / Friction
-            // If we are grounded and not inputting, STOP fast to prevent sliding
             if (this.isGrounded) {
-                // Aggressive damping on ground (Exponential decay for smoothness but fast)
-                // Using 0.0001 as target, effectively zero
-                currentVel.x = THREE.MathUtils.lerp(currentVel.x, 0, 15 * deltaTime);
-                currentVel.z = THREE.MathUtils.lerp(currentVel.z, 0, 15 * deltaTime);
+                // Ground Friction
+                // Use a slightly less aggressive lerp to avoid "Stop on a Dime" jitter, but still snappy
+                currentVel.x = THREE.MathUtils.lerp(currentVel.x, 0, 10 * deltaTime);
+                currentVel.z = THREE.MathUtils.lerp(currentVel.z, 0, 10 * deltaTime);
 
-                // Hard snapping if very slow to prevent micro-sliding
+                // Snap to zero threshold
                 if (Math.abs(currentVel.x) < 0.1) currentVel.x = 0;
                 if (Math.abs(currentVel.z) < 0.1) currentVel.z = 0;
             } else {
-                // In Air Friction (Linear)
+                // Air Friction
                 const speed = Math.sqrt(currentVel.x ** 2 + currentVel.z ** 2);
                 if (speed > 0) {
                     const drop = friction * deltaTime;
@@ -446,22 +447,26 @@ export class Player {
             }
         }
 
-        // CHECK RAGDOLL TRIGGER (Debounced)
-        // Stationary, In Air, Sprint Key Pressed
-        const speed = Math.sqrt(currentVel.x ** 2 + currentVel.z ** 2);
-        if (!this.isGrounded && speed < 1.0 && this.input.keys.sprint && !this.isRagdoll && this.ragdollDebounce <= 0) {
+        // CHECK RAGDOLL TRIGGER (Safety Debounced)
+        // Must be in air for at least 0.3s to prevent accidental trigger on ground bumps
+        const horizontalSpeed = Math.sqrt(currentVel.x ** 2 + currentVel.z ** 2);
+
+        const canRagdoll = !this.isGrounded && this.airTime > 0.3; // Require real air time
+
+        if (canRagdoll && horizontalSpeed < 1.0 && this.input.keys.sprint && !this.isRagdoll && this.ragdollDebounce <= 0) {
             this.isRagdoll = true;
             this.ragdollTimer = 2.0;
             this.ragdollDebounce = 1.0;
         }
 
         // 4. Jump Logic
+        // Allow jump if grounded OR (Coyote Time - Optional, not implemented here but good to know)
         if (this.input.keys.jump && this.isGrounded && this.jumpCooldown <= 0) {
             this.body.velocity.y = this.params.jumpForce;
             this.jumpCooldown = 0.25;
             this.input.keys.jump = false;
-            // Force Unground immediately to prevent double jump or friction application
             this.isGrounded = false;
+            this.airTime = 0.1; // Force immediate air state
             this.body.wakeUp();
         }
     }
@@ -568,12 +573,13 @@ export class Player {
 
     checkGrounded() {
         const from = this.body.position;
-        // Increased tolerance from 0.2 to 0.5 to definitively catch the ground
-        const to = from.vsub(new CANNON.Vec3(0, this.params.radius + 0.5, 0));
+        // Reverted tolerance to 0.25 (Tight but reliable). 0.5 was too high, causing air friction near ground.
+        const to = from.vsub(new CANNON.Vec3(0, this.params.radius + 0.25, 0));
         const result = new CANNON.RaycastResult();
 
         // If explicitly moving UP fast, we are jumping/flying, not grounded.
-        if (this.body.velocity.y > 2.0) return false;
+        // Threshold 4.0 covers the jump launch (13.0) but ignores small jitter/bumps.
+        if (this.body.velocity.y > 4.0) return false;
 
         if (this.physics && this.physics.world) {
             const hasHit = this.physics.world.raycastClosest(from, to, {
