@@ -193,7 +193,7 @@ const __distPath = path.join(__dirname, '../dist');
 app.use(express.static(__distPath));
 
 // Herhangi bir route gelirse index.html gönder (SPA desteği)
-app.get('*', (req, res) => {
+app.get('(.*)', (req, res) => {
     res.sendFile(path.join(__distPath, 'index.html'));
 });
 
