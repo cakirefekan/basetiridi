@@ -151,12 +151,17 @@ export class NetworkManager {
         const isLocallyControlled = this.game.player && this.game.player.holdingObject === body;
         const hasRecentLocalInteraction = this.trackedObjects[data.id] && this.trackedObjects[data.id].isActive;
 
-        if (isLocallyControlled || hasRecentLocalInteraction || isClose) {
+        // Ensure physics are ready for interaction if close
+        if (isClose || isLocallyControlled || hasRecentLocalInteraction) {
             if (body.type !== CANNON.Body.DYNAMIC) {
                 body.type = CANNON.Body.DYNAMIC;
                 body.wakeUp();
             }
-            // Do not apply remote data if we are close/interacting
+        }
+
+        // BLOCK Network updates ONLY if we are explicitly controlling it (Holding or Just Collided)
+        // We do NOT block just because we are close (isClose).
+        if (isLocallyControlled || hasRecentLocalInteraction) {
             return;
         }
 
