@@ -47,13 +47,14 @@ export class Game {
 
     async init() {
         // Check URL for Map Selection
+        // Set mapName immediately to avoid race conditions with Auth/Network
         if (window.location.pathname === '/football') {
+            this.mapName = 'football';
             const { FootballWorld } = await import('../World/FootballWorld.js');
             this.world = new FootballWorld(this);
-            this.mapName = 'football';
         } else {
-            this.world = new World(this);
             this.mapName = 'default';
+            this.world = new World(this);
         }
     }
 
